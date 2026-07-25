@@ -393,4 +393,5 @@ WORKDIR ${VOICE_STUDIO_DIR}
 
 EXPOSE 7860
 
-CMD ["/usr/local/bin/start-voice-studio.sh"]
+#CMD ["/usr/local/bin/start-voice-studio.sh"]
+CMD ["sleep", "infinity"]
