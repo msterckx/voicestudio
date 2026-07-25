@@ -28,7 +28,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile-comfyui.txt
+          file: Dockerfile.txt
           push: true
           tags: |
             msterckx/voicestudio:1.0
