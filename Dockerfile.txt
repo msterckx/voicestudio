@@ -1,8 +1,11 @@
-# ============================================================
-# Voice Clone Studio - Runpod Pod / future Serverless base
-# ============================================================
+
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+
+# ============================================================
+# Environment
+# ============================================================
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -10,27 +13,23 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_NO_CACHE_DIR=1
 
-# Voice Studio location inside the immutable container
 ENV VOICE_STUDIO_DIR=/opt/Voice-Clone-Studio
 
-# Gradio
 ENV GRADIO_SERVER_NAME=0.0.0.0
 ENV GRADIO_SERVER_PORT=7860
-
-# CUDA / bitsandbytes
-ENV BNB_CUDA_VERSION=128
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 
 
 # ============================================================
 # System packages
+#
+# Ubuntu 22.04 ships Python 3.10 natively.
 # ============================================================
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.12 \
-    python3.12-venv \
-    python3-pip \
+    python3 \
     python3-dev \
+    python3-venv \
+    python3-pip \
     build-essential \
     git \
     git-lfs \
@@ -46,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libgl1 \
     libglib2.0-0 \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -53,7 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python virtual environment
 # ============================================================
 
-RUN python3.12 -m venv /opt/venv
+RUN python3 -m venv /opt/venv
 
 ENV PATH="/opt/venv/bin:${PATH}"
 
@@ -64,15 +64,19 @@ RUN python -m pip install --upgrade \
 
 
 # ============================================================
-# PyTorch CUDA 12.8
+# PyTorch CUDA 12.4
 #
-# Matches current Voice Clone Studio Docker configuration
+# Official PyTorch combination:
+#
+# torch       2.6.0
+# torchvision 0.21.0
+# torchaudio  2.6.0
 # ============================================================
 
 RUN pip install --no-cache-dir \
-    torch==2.4.1 \
-    torchvision==0.19.1 \
-    torchaudio==2.4.1 \
+    torch==2.6.0 \
+    torchvision==0.21.0 \
+    torchaudio==2.6.0 \
     --index-url https://download.pytorch.org/whl/cu124
 
 
@@ -80,7 +84,7 @@ RUN pip install --no-cache-dir \
 # Clone Voice Clone Studio
 # ============================================================
 
-RUN git clone --depth 1 \
+RUN git clone \
     https://github.com/FranckyB/Voice-Clone-Studio.git \
     ${VOICE_STUDIO_DIR}
 
@@ -90,72 +94,13 @@ RUN git lfs install
 
 
 # ============================================================
-# Rust
+# Voice Clone Studio requirements
 #
-# Required for dependencies such as DeepFilterNet that may
-# need native compilation.
-# ============================================================
-
-RUN curl --proto '=https' \
-    --tlsv1.2 \
-    -sSf https://sh.rustup.rs \
-    | sh -s -- -y
-
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-
-# ============================================================
-# Main Voice Clone Studio dependencies
+# The current repository uses requirements_linux.txt.
 #
-# These mirror the project's current Docker environment.
-# ============================================================
-
-RUN pip install --no-cache-dir \
-    gradio==6.5.1 \
-    soundfile==0.13.1 \
-    librosa==0.11.0 \
-    numpy==1.26.4 \
-    sox==1.5.0 \
-    diffusers==0.36.0 \
-    deepfilternet==0.5.6 \
-    qwen-tts==0.0.5 \
-    scipy \
-    huggingface_hub \
-    modelscope \
-    psutil \
-    packaging \
-    ninja \
-    requests \
-    pytz \
-    bitsandbytes==0.49.1 \
-    onnxruntime \
-    onnxruntime-gpu==1.23.2 \
-    markdown==3.10.1 \
-    einops \
-    open_clip_torch \
-    torchdiffeq \
-    timm \
-    colorlog \
-    omegaconf \
-    opencv-python
-
-
-# ============================================================
-# Flash Attention
-#
-# Same precompiled wheel currently used by upstream Dockerfile.
-# Avoids compiling flash-attn during docker build.
-# ============================================================
-
-RUN pip install --no-cache-dir \
-    "flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
-
-
-# ============================================================
-# Install repository requirements
-#
-# Important because Voice Studio's requirements change over
-# time and include its bundled gradio_filelister wheel.
+# torchaudio is already installed above. pip should retain our
+# installed compatible version because the requirements file
+# does not pin another torchaudio version.
 # ============================================================
 
 RUN pip install --no-cache-dir \
@@ -163,86 +108,129 @@ RUN pip install --no-cache-dir \
 
 
 # ============================================================
-# Chatterbox dependencies
-# ============================================================
-
-RUN pip install --no-cache-dir \
-    s3tokenizer \
-    conformer
-
-
-# ============================================================
-# LuxTTS dependencies
+# Fish Speech S2 codec dependencies
 #
-# Included because this is a full Voice Studio installation.
+# Upstream setup script deliberately installs these with
+# --no-deps because audiotools has an old protobuf constraint.
 # ============================================================
 
-RUN pip install --no-cache-dir \
-    git+https://github.com/ysharma3501/LinaCodec.git
-
-RUN pip install --no-cache-dir \
-    piper-phonemize \
-    --find-links https://k2-fsa.github.io/icefall/piper_phonemize.html
-
-RUN pip install --no-cache-dir \
-    "zipvoice @ git+https://github.com/ysharma3501/LuxTTS.git"
+RUN pip install --no-cache-dir --no-deps \
+    descript-audio-codec \
+    descript-audiotools \
+    || true
 
 
 # ============================================================
-# Qwen ASR
-# Install last because it may update transformers.
+# DeepFilterNet
+#
+# Optional. Voice Studio still works if this fails.
 # ============================================================
 
-RUN pip install --no-cache-dir -U qwen-asr
-
-
-# Rust is no longer needed at runtime
-RUN rustup self uninstall -y || true
+RUN pip install --no-cache-dir deepfilternet \
+    || echo "WARNING: DeepFilterNet installation failed. Denoising will be unavailable."
 
 
 # ============================================================
-# Runpod persistent storage bootstrap
+# Important:
 #
-# Normal Pod:
-#       /workspace
+# For the first working build we deliberately DO NOT install:
 #
-# Serverless:
-#       /runpod-volume
+#   - Flash Attention
+#   - faster-qwen3-tts
+#   - LuxTTS
+#   - Qwen3 ASR
+#   - llama.cpp
 #
-# We create symlinks so Voice Studio itself continues seeing:
+# These are optional and can introduce CUDA/PyTorch dependency
+# conflicts. Once the basic voice clone workflow is confirmed,
+# they can be added one at a time.
+# ============================================================
+
+
+# ============================================================
+# Dependency sanity check during Docker build
+# ============================================================
+
+RUN python - <<'PY'
+import sys
+import torch
+import torchaudio
+import torchvision
+
+print("Python:", sys.version)
+print("Torch:", torch.__version__)
+print("Torchvision:", torchvision.__version__)
+print("Torchaudio:", torchaudio.__version__)
+print("Torch CUDA runtime:", torch.version.cuda)
+PY
+
+
+# ============================================================
+# Startup script
 #
-#       /opt/Voice-Clone-Studio/samples
-#       /opt/Voice-Clone-Studio/models
-#       /opt/Voice-Clone-Studio/output
+# Storage layouts:
 #
-# but the actual files live on persistent storage.
+# Normal Runpod Pod:
+#     /workspace
+#
+# Serverless with Network Volume:
+#     /runpod-volume
+#
+# Local Docker fallback:
+#     /data
+#
+# Voice Studio itself continues using:
+#
+# /opt/Voice-Clone-Studio/samples
+# /opt/Voice-Clone-Studio/output
+# /opt/Voice-Clone-Studio/models
+# /opt/Voice-Clone-Studio/datasets
+#
+# Those are symlinked to persistent storage.
 # ============================================================
 
 RUN cat > /usr/local/bin/start-voice-studio.sh <<'EOF'
 #!/bin/bash
 
-set -euo pipefail
+set -e
+
+
+echo
+echo "============================================================"
+echo " Voice Clone Studio"
+echo "============================================================"
+echo
 
 
 # ------------------------------------------------------------
-# Determine persistent volume location
+# Detect persistent storage location
 # ------------------------------------------------------------
 
 if [ -d "/runpod-volume" ]; then
+
+    # Runpod Serverless
     VOLUME_ROOT="/runpod-volume"
+
 elif [ -d "/workspace" ]; then
+
+    # Normal Runpod Pod
     VOLUME_ROOT="/workspace"
+
 else
-    # Makes the container usable outside Runpod as well.
+
+    # Local Docker fallback
     VOLUME_ROOT="/data"
     mkdir -p "${VOLUME_ROOT}"
+
 fi
 
 
-echo "============================================================"
-echo "Voice Clone Studio"
-echo "Persistent volume: ${VOLUME_ROOT}"
-echo "============================================================"
+VOICE_DATA_ROOT="${VOLUME_ROOT}/voice-studio"
+
+
+echo "Persistent root : ${VOLUME_ROOT}"
+echo "Voice data root : ${VOICE_DATA_ROOT}"
+echo
 
 
 # ------------------------------------------------------------
@@ -250,89 +238,130 @@ echo "============================================================"
 # ------------------------------------------------------------
 
 mkdir -p \
-    "${VOLUME_ROOT}/voice-studio/samples" \
-    "${VOLUME_ROOT}/voice-studio/models" \
-    "${VOLUME_ROOT}/voice-studio/output" \
-    "${VOLUME_ROOT}/voice-studio/cache/huggingface" \
-    "${VOLUME_ROOT}/voice-studio/cache/modelscope"
+    "${VOICE_DATA_ROOT}/samples" \
+    "${VOICE_DATA_ROOT}/output" \
+    "${VOICE_DATA_ROOT}/models" \
+    "${VOICE_DATA_ROOT}/datasets" \
+    "${VOICE_DATA_ROOT}/cache/huggingface" \
+    "${VOICE_DATA_ROOT}/cache/modelscope"
 
 
 # ------------------------------------------------------------
-# Hugging Face / ModelScope caches
+# Persistent Hugging Face / model caches
 # ------------------------------------------------------------
 
-export HF_HOME="${VOLUME_ROOT}/voice-studio/cache/huggingface"
+export HF_HOME="${VOICE_DATA_ROOT}/cache/huggingface"
 export HUGGINGFACE_HUB_CACHE="${HF_HOME}/hub"
-export TRANSFORMERS_CACHE="${HF_HOME}/transformers"
-export MODELSCOPE_CACHE="${VOLUME_ROOT}/voice-studio/cache/modelscope"
+
+export MODELSCOPE_CACHE="${VOICE_DATA_ROOT}/cache/modelscope"
 
 
 # ------------------------------------------------------------
-# Replace Voice Studio data directories with persistent links.
-#
-# Never replace the application source itself.
+# Link Voice Studio folders to persistent storage
 # ------------------------------------------------------------
 
-cd /opt/Voice-Clone-Studio
+link_directory()
+{
+    NAME="$1"
 
+    SOURCE="${VOICE_DATA_ROOT}/${NAME}"
+    TARGET="/opt/Voice-Clone-Studio/${NAME}"
 
-for DIR in samples models output; do
+    mkdir -p "${SOURCE}"
 
-    TARGET="${VOLUME_ROOT}/voice-studio/${DIR}"
-    LINK="/opt/Voice-Clone-Studio/${DIR}"
+    if [ -L "${TARGET}" ]; then
 
-    if [ -L "${LINK}" ]; then
-        rm -f "${LINK}"
-    elif [ -d "${LINK}" ]; then
+        rm -f "${TARGET}"
 
-        # Preserve anything the repository/container originally
-        # supplied before replacing it with the persistent link.
-        cp -an "${LINK}/." "${TARGET}/" 2>/dev/null || true
+    elif [ -d "${TARGET}" ]; then
 
-        rm -rf "${LINK}"
-    elif [ -e "${LINK}" ]; then
-        rm -f "${LINK}"
+        # Preserve anything already provided by the repo.
+        cp -an "${TARGET}/." "${SOURCE}/" 2>/dev/null || true
+        rm -rf "${TARGET}"
+
+    elif [ -e "${TARGET}" ]; then
+
+        rm -f "${TARGET}"
+
     fi
 
-    ln -s "${TARGET}" "${LINK}"
-
-done
-
-
-echo
-echo "Samples:"
-echo "  ${VOLUME_ROOT}/voice-studio/samples"
-echo
-echo "Models:"
-echo "  ${VOLUME_ROOT}/voice-studio/models"
-echo
-echo "Outputs:"
-echo "  ${VOLUME_ROOT}/voice-studio/output"
-echo
-echo "Hugging Face cache:"
-echo "  ${HF_HOME}"
-echo
+    ln -s "${SOURCE}" "${TARGET}"
+}
 
 
-# Useful diagnostics
+link_directory samples
+link_directory output
+link_directory models
+link_directory datasets
+
+
+# ------------------------------------------------------------
+# Show storage configuration
+# ------------------------------------------------------------
+
+echo "Persistent links:"
+echo
+
+ls -ld \
+    /opt/Voice-Clone-Studio/samples \
+    /opt/Voice-Clone-Studio/output \
+    /opt/Voice-Clone-Studio/models \
+    /opt/Voice-Clone-Studio/datasets
+
+echo
+
+
+# ------------------------------------------------------------
+# GPU diagnostics
+# ------------------------------------------------------------
+
 python - <<'PY'
+import sys
 import torch
 
-print("Python / Torch startup check")
-print("Torch:", torch.__version__)
+print("Python:")
+print(sys.version)
+print()
+
+print("PyTorch:", torch.__version__)
+print("PyTorch CUDA runtime:", torch.version.cuda)
 print("CUDA available:", torch.cuda.is_available())
 
 if torch.cuda.is_available():
+
+    print("GPU count:", torch.cuda.device_count())
     print("GPU:", torch.cuda.get_device_name(0))
-    print("CUDA:", torch.version.cuda)
+
+else:
+
+    print()
+    print("WARNING: CUDA is not available.")
 PY
 
 
 echo
-echo "Starting Voice Clone Studio..."
+echo "Reference voice samples:"
 echo
 
-exec python3 voice_clone_studio.py
+find "${VOICE_DATA_ROOT}/samples" \
+    -maxdepth 1 \
+    -type f \
+    -printf '  %f\n' \
+    2>/dev/null || true
+
+
+echo
+echo "============================================================"
+echo " Starting Voice Clone Studio"
+echo " Port: 7860"
+echo "============================================================"
+echo
+
+
+cd /opt/Voice-Clone-Studio
+
+exec python voice_clone_studio.py
+
 EOF
 
 
@@ -340,21 +369,28 @@ RUN chmod +x /usr/local/bin/start-voice-studio.sh
 
 
 # ============================================================
-# Final sanity checks at image-build time
+# Final import test
 # ============================================================
 
-RUN python -c "import torch; print('Torch:', torch.__version__)" && \
-    python -c "import gradio; print('Gradio:', gradio.__version__)" && \
-    python -c "import soundfile; print('soundfile OK')" && \
-    python -c "import librosa; print('librosa OK')"
+RUN python - <<'PY'
+import torch
+import gradio
+import soundfile
+import librosa
+
+print("Voice Studio build checks OK")
+print("Torch:", torch.__version__)
+print("CUDA runtime in Torch:", torch.version.cuda)
+print("Gradio:", gradio.__version__)
+PY
 
 
 # ============================================================
-# Voice Studio UI
+# Runtime configuration
 # ============================================================
-
-EXPOSE 7860
 
 WORKDIR ${VOICE_STUDIO_DIR}
+
+EXPOSE 7860
 
 CMD ["/usr/local/bin/start-voice-studio.sh"]
