@@ -385,7 +385,7 @@ print("Gradio:", gradio.__version__)
 PY
 
 COPY handler.py /opt/Voice-Clone-Studio/handler.py
-
+RUN pip install --no-cache-dir runpod
 # ============================================================
 # Runtime configuration
 # ============================================================
