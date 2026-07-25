@@ -384,6 +384,7 @@ print("CUDA runtime in Torch:", torch.version.cuda)
 print("Gradio:", gradio.__version__)
 PY
 
+COPY handler.py /opt/Voice-Clone-Studio/handler.py
 
 # ============================================================
 # Runtime configuration
@@ -394,4 +395,5 @@ WORKDIR ${VOICE_STUDIO_DIR}
 EXPOSE 7860
 
 #CMD ["/usr/local/bin/start-voice-studio.sh"]
-CMD ["sleep", "infinity"]
+#CMD ["sleep", "infinity"]
+CMD ["python", "-u", "/opt/Voice-Clone-Studio/handler.py"]
