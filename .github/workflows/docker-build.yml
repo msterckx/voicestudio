@@ -31,5 +31,5 @@ jobs:
           file: Dockerfile.txt
           push: true
           tags: |
-            msterckx/voicestudio:1.0
-            msterckx/voicestudio:latest
+            msterckx/voicestudio-serverless:1.0
+            msterckx/voicestudio-serverless:latest
