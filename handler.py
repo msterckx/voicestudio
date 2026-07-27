@@ -35,21 +35,47 @@ from modules.core_components.tools import get_or_create_voice_prompt_standalone
 tts_manager = get_tts_manager()
 
 
+def _normalize_output_name(output_name):
+    """Validate an optional output file name and ensure a .wav extension."""
+
+    if output_name is None:
+        return None
+
+    output_name = str(output_name).strip()
+
+    if not output_name:
+        return None
+
+    if not output_name.lower().endswith(".wav"):
+        output_name += ".wav"
+
+    if Path(output_name).name != output_name or output_name.startswith("."):
+        raise ValueError(
+            f'"output_name" must be a plain file name, got: {output_name}'
+        )
+
+    return output_name
+
+
 def _normalize_generations(job_input):
     """Return a list of per-generation request dicts.
 
     Supports two input shapes:
 
-    * A ``generations`` list, where each item holds its own
-      ``text`` / ``sample`` / ``sample_text`` and optionally overrides
-      ``language`` / ``model_size`` / ``seed``.
+    * A ``generations`` list, where each item holds its own ``text``,
+      optionally an ``output_name`` for the generated WAV, and optionally
+      overrides ``sample`` / ``sample_text`` / ``language`` /
+      ``model_size`` / ``seed``.
     * The legacy single-generation shape, where those fields live at the
       top level of ``input``.
 
-    Top-level ``language`` / ``model_size`` / ``seed`` act as defaults that
-    each generation inherits unless it provides its own value.
+    Top-level ``sample`` / ``sample_text`` / ``language`` / ``model_size`` /
+    ``seed`` act as defaults that each generation inherits unless it
+    provides its own value.
     """
 
+    default_sample = job_input.get("sample")
+    default_sample_text = job_input.get("sample_text")
     default_language = job_input.get("language", "Auto")
     default_model_size = job_input.get("model_size", "1.7B")
     default_seed = job_input.get("seed", -1)
@@ -60,8 +86,7 @@ def _normalize_generations(job_input):
         # Legacy single-generation request.
         raw_generations = [{
             "text": job_input.get("text"),
-            "sample": job_input.get("sample"),
-            "sample_text": job_input.get("sample_text"),
+            "output_name": job_input.get("output_name"),
         }]
     elif not isinstance(raw_generations, list):
         raise ValueError('Field "generations" must be a list')
@@ -76,12 +101,21 @@ def _normalize_generations(job_input):
 
         generations.append({
             "text": gen.get("text"),
-            "sample": gen.get("sample"),
-            "sample_text": gen.get("sample_text"),
+            "output_name": _normalize_output_name(gen.get("output_name")),
+            "sample": gen.get("sample", default_sample),
+            "sample_text": gen.get("sample_text", default_sample_text),
             "language": gen.get("language", default_language),
             "model_size": gen.get("model_size", default_model_size),
             "seed": int(gen.get("seed", default_seed)),
         })
+
+    named = [g["output_name"] for g in generations if g["output_name"]]
+    duplicates = {name for name in named if named.count(name) > 1}
+    if duplicates:
+        raise ValueError(
+            'Duplicate "output_name" values would overwrite each other: '
+            + ", ".join(sorted(duplicates))
+        )
 
     return generations
 
@@ -117,7 +151,8 @@ def _generate_one(spec, index, job_output_dir):
             f"Generation {index}: reference sample not found: {sample_path}"
         )
 
-    output_path = job_output_dir / f"output_{index}.wav"
+    output_name = spec["output_name"] or f"output_{index}.wav"
+    output_path = job_output_dir / output_name
 
     print(f"Generation {index}: sample {sample_path}", flush=True)
     print(f"Generation {index}: model Qwen3 {model_size}", flush=True)
@@ -215,6 +250,7 @@ def _generate_one(spec, index, job_output_dir):
 
     return {
         "sample": sample_name,
+        "output_name": output_name,
         "output_key": output_key,
         "sample_rate": sample_rate,
         "size_bytes": file_size,
@@ -269,18 +305,19 @@ if __name__ == "__main__":
                 "seed": -1,
 
                 # IMPORTANT:
-                # Replace "sample_text" with the exact transcript of the
-                # celeste_48k_stereo.wav reference recording.
+                # "sample_text" must be the exact transcript of the
+                # reference recording named in "sample".
+                "sample": "celeste_48k_stereo.wav",
+                "sample_text": "At the edge of the northern forest, morning light drifts across ancient trees, revealing a quiet world shaped by time, memory, and the delicate balance between nature and change.",
+
                 "generations": [
                     {
                         "text": "This is the first line of my cloned voice.",
-                        "sample": "celeste_48k_stereo.wav",
-                        "sample_text": "At the edge of the northern forest, morning light drifts across ancient trees, revealing a quiet world shaped by time, memory, and the delicate balance between nature and change.",
+                        "output_name": "first_line.wav",
                     },
                     {
+                        # No "output_name": falls back to output_1.wav.
                         "text": "And this is a second, separate generation.",
-                        "sample": "celeste_48k_stereo.wav",
-                        "sample_text": "At the edge of the northern forest, morning light drifts across ancient trees, revealing a quiet world shaped by time, memory, and the delicate balance between nature and change.",
                     },
                 ],
             },
