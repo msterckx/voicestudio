@@ -35,26 +35,78 @@ from modules.core_components.tools import get_or_create_voice_prompt_standalone
 tts_manager = get_tts_manager()
 
 
-def handler(job):
-    job_input = job.get("input", {})
+def _normalize_generations(job_input):
+    """Return a list of per-generation request dicts.
 
-    text = job_input.get("text")
-    sample_name = job_input.get("sample")
-    sample_text = job_input.get("sample_text")
+    Supports two input shapes:
 
-    language = job_input.get("language", "Auto")
-    model_size = job_input.get("model_size", "1.7B")
-    seed = int(job_input.get("seed", -1))
+    * A ``generations`` list, where each item holds its own
+      ``text`` / ``sample`` / ``sample_text`` and optionally overrides
+      ``language`` / ``model_size`` / ``seed``.
+    * The legacy single-generation shape, where those fields live at the
+      top level of ``input``.
+
+    Top-level ``language`` / ``model_size`` / ``seed`` act as defaults that
+    each generation inherits unless it provides its own value.
+    """
+
+    default_language = job_input.get("language", "Auto")
+    default_model_size = job_input.get("model_size", "1.7B")
+    default_seed = job_input.get("seed", -1)
+
+    raw_generations = job_input.get("generations")
+
+    if raw_generations is None:
+        # Legacy single-generation request.
+        raw_generations = [{
+            "text": job_input.get("text"),
+            "sample": job_input.get("sample"),
+            "sample_text": job_input.get("sample_text"),
+        }]
+    elif not isinstance(raw_generations, list):
+        raise ValueError('Field "generations" must be a list')
+    elif not raw_generations:
+        raise ValueError('Field "generations" must not be empty')
+
+    generations = []
+
+    for gen in raw_generations:
+        if not isinstance(gen, dict):
+            raise ValueError("Each generation must be an object")
+
+        generations.append({
+            "text": gen.get("text"),
+            "sample": gen.get("sample"),
+            "sample_text": gen.get("sample_text"),
+            "language": gen.get("language", default_language),
+            "model_size": gen.get("model_size", default_model_size),
+            "seed": int(gen.get("seed", default_seed)),
+        })
+
+    return generations
+
+
+def _generate_one(spec, index, job_output_dir):
+    """Run a single voice-clone generation and write its WAV to disk."""
+
+    text = spec["text"]
+    sample_name = spec["sample"]
+    sample_text = spec["sample_text"]
+    language = spec["language"]
+    model_size = spec["model_size"]
+    seed = spec["seed"]
 
     if not text:
-        raise ValueError('Missing required field "text"')
+        raise ValueError(f'Generation {index}: missing required field "text"')
 
     if not sample_name:
-        raise ValueError('Missing required field "sample"')
+        raise ValueError(
+            f'Generation {index}: missing required field "sample"'
+        )
 
     if not sample_text:
         raise ValueError(
-            'Missing required field "sample_text": '
+            f'Generation {index}: missing required field "sample_text": '
             "provide the exact transcript of the reference audio."
         )
 
@@ -62,19 +114,13 @@ def handler(job):
 
     if not sample_path.exists():
         raise FileNotFoundError(
-            f"Reference sample not found: {sample_path}"
+            f"Generation {index}: reference sample not found: {sample_path}"
         )
 
-    job_id = str(job.get("id", "manual"))
+    output_path = job_output_dir / f"output_{index}.wav"
 
-    job_output_dir = OUTPUT_DIR / job_id
-    job_output_dir.mkdir(parents=True, exist_ok=True)
-
-    output_path = job_output_dir / "output.wav"
-
-    print(f"Generating voice for job {job_id}", flush=True)
-    print(f"Sample: {sample_path}", flush=True)
-    print(f"Model: Qwen3 {model_size}", flush=True)
+    print(f"Generation {index}: sample {sample_path}", flush=True)
+    print(f"Generation {index}: model Qwen3 {model_size}", flush=True)
 
     # -----------------------------------------------------------------------
     # Load Qwen Base model
@@ -86,7 +132,7 @@ def handler(job):
     # Build or reuse the voice-clone prompt
     # -----------------------------------------------------------------------
 
-    print("Preparing voice clone prompt...", flush=True)
+    print(f"Generation {index}: preparing voice clone prompt...", flush=True)
 
     prompt_items, was_cached = get_or_create_voice_prompt_standalone(
         model=model,
@@ -98,7 +144,7 @@ def handler(job):
     )
 
     print(
-        f"Voice clone prompt ready; cached={was_cached}",
+        f"Generation {index}: voice clone prompt ready; cached={was_cached}",
         flush=True,
     )
 
@@ -134,10 +180,7 @@ def handler(job):
     # Write WAV
     # -----------------------------------------------------------------------
 
-    print(
-        f"Writing audio to {output_path}",
-        flush=True,
-    )
+    print(f"Generation {index}: writing audio to {output_path}", flush=True)
 
     sf.write(
         str(output_path),
@@ -151,21 +194,21 @@ def handler(job):
 
     if not output_path.exists():
         raise RuntimeError(
-            f"TTS generation completed but output file was not created: "
-            f"{output_path}"
+            f"Generation {index}: TTS generation completed but output file "
+            f"was not created: {output_path}"
         )
 
     file_size = output_path.stat().st_size
 
     if file_size == 0:
         raise RuntimeError(
-            f"Generated WAV is empty: {output_path}"
+            f"Generation {index}: generated WAV is empty: {output_path}"
         )
 
     output_key = output_path.relative_to(VOLUME_ROOT).as_posix()
 
     print(
-        f"Generation complete: {output_path} "
+        f"Generation {index}: complete: {output_path} "
         f"({file_size} bytes, {sample_rate} Hz)",
         flush=True,
     )
@@ -176,6 +219,35 @@ def handler(job):
         "sample_rate": sample_rate,
         "size_bytes": file_size,
     }
+
+
+def handler(job):
+    job_input = job.get("input", {})
+
+    generations = _normalize_generations(job_input)
+
+    job_id = str(job.get("id", "manual"))
+
+    job_output_dir = OUTPUT_DIR / job_id
+    job_output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(
+        f"Generating voice for job {job_id} "
+        f"({len(generations)} generation(s))",
+        flush=True,
+    )
+
+    results = [
+        _generate_one(spec, index, job_output_dir)
+        for index, spec in enumerate(generations)
+    ]
+
+    # Preserve the original single-object response shape for legacy
+    # single-generation requests, while returning a list for batches.
+    if job_input.get("generations") is None:
+        return results[0]
+
+    return {"generations": results}
 
 
 # ---------------------------------------------------------------------------
@@ -191,17 +263,26 @@ if __name__ == "__main__":
         result = handler({
             "id": "local-test",
             "input": {
-                "text": "This is a local test of my cloned voice.",
-                "sample": "celeste_48k_stereo.wav",
-
-                # IMPORTANT:
-                # Replace this with the exact transcript of the
-                # celeste_48k_stereo.wav reference recording.
-                "sample_text": "At the edge of the northern forest, morning light drifts across ancient trees, revealing a quiet world shaped by time, memory, and the delicate balance between nature and change.",
-
+                # Shared defaults inherited by every generation below.
                 "language": "Auto",
                 "model_size": "1.7B",
                 "seed": -1,
+
+                # IMPORTANT:
+                # Replace "sample_text" with the exact transcript of the
+                # celeste_48k_stereo.wav reference recording.
+                "generations": [
+                    {
+                        "text": "This is the first line of my cloned voice.",
+                        "sample": "celeste_48k_stereo.wav",
+                        "sample_text": "At the edge of the northern forest, morning light drifts across ancient trees, revealing a quiet world shaped by time, memory, and the delicate balance between nature and change.",
+                    },
+                    {
+                        "text": "And this is a second, separate generation.",
+                        "sample": "celeste_48k_stereo.wav",
+                        "sample_text": "At the edge of the northern forest, morning light drifts across ancient trees, revealing a quiet world shaped by time, memory, and the delicate balance between nature and change.",
+                    },
+                ],
             },
         })
 
